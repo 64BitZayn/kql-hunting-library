@@ -1,0 +1,28 @@
+// One row per malicious or suspicious email, with everything an analyst needs
+// ---------------------------------------------------------------
+// Joins the four Defender for Office 365 email tables on NetworkMessageId:
+// who sent it, who received it, what was attached, which URLs it carried,
+// and what happened after delivery (ZAP, user report, admin purge).
+// Tables: EmailEvents, EmailAttachmentInfo, EmailUrlInfo, EmailPostDeliveryEvents
+let lookback = 7d;
+let Mail = EmailEvents
+    | where Timestamp > ago(lookback)
+    | where isnotempty(ThreatTypes) or DeliveryAction != "Delivered"
+    | project Timestamp, NetworkMessageId, SenderFromAddress, SenderDisplayName, SenderIPv4,
+              RecipientEmailAddress, Subject, EmailDirection, ThreatTypes, DetectionMethods,
+              ConfidenceLevel, DeliveryAction, DeliveryLocation, AttachmentCount, UrlCount;
+let Attachments = EmailAttachmentInfo
+    | where Timestamp > ago(lookback)
+    | summarize Attachments = make_set(FileName, 20), AttachmentSHA256 = make_set(SHA256, 20) by NetworkMessageId;
+let Urls = EmailUrlInfo
+    | where Timestamp > ago(lookback)
+    | summarize Urls = make_set(Url, 20), UrlDomains = make_set(UrlDomain, 20) by NetworkMessageId;
+let PostDelivery = EmailPostDeliveryEvents
+    | where Timestamp > ago(lookback)
+    | summarize PostDeliveryActions = make_set(strcat(ActionType, ": ", Action, " -> ", ActionResult), 10) by NetworkMessageId;
+// lookup (unlike join) keeps a single NetworkMessageId column
+Mail
+| lookup kind=leftouter Attachments  on NetworkMessageId
+| lookup kind=leftouter Urls         on NetworkMessageId
+| lookup kind=leftouter PostDelivery on NetworkMessageId
+| order by Timestamp desc

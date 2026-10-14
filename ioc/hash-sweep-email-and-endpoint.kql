@@ -1,0 +1,23 @@
+// IOC hash sweep: email attachments + endpoints in one go
+// ---------------------------------------------------------------
+// Paste the hashes from a threat intel report into IOCs. MD5, SHA-1 and
+// SHA-256 can be mixed: each is matched against the right column.
+// Email only stores SHA-256, so that part only matches SHA-256 values.
+// Example value: the EICAR test file, harmless and detected by every AV.
+let lookback = 30d;
+let IOCs = dynamic([
+    "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f"   // EICAR (SHA-256)
+]);
+let EmailHits = EmailAttachmentInfo
+    | where Timestamp > ago(lookback)
+    | where SHA256 in~ (IOCs)
+    | project Timestamp, Source = "Email", Entity = RecipientEmailAddress,
+              Detail = strcat("from ", SenderFromAddress), FileName, MatchedHash = SHA256;
+let EndpointHits = union DeviceFileEvents, DeviceProcessEvents, DeviceImageLoadEvents, DeviceEvents
+    | where Timestamp > ago(lookback)
+    | where SHA256 in~ (IOCs) or SHA1 in~ (IOCs) or MD5 in~ (IOCs)
+    | extend MatchedHash = case(SHA256 in~ (IOCs), SHA256, SHA1 in~ (IOCs), SHA1, MD5)
+    | project Timestamp, Source = "Endpoint", Entity = DeviceName,
+              Detail = strcat(ActionType, " by ", InitiatingProcessAccountName), FileName, MatchedHash;
+union EmailHits, EndpointHits
+| order by Timestamp desc
